@@ -1,0 +1,188 @@
+---
+title: "CDR3 Analysis"
+author: "Sean Ryan"
+date: "3/19/2020"
+output: html_document
+---
+# Analysis of CDR3 Sequencing Data from Virtual Memory and Naive CD8 T Cells
+
+## Introduction
+Recently in the Savage lab we have been investigating a population of CD8 T cells that have the characteristics of memory cells yet exist in unprimed mice termed "Virtually Memory Cells" (VM). During this investigation, the CDR3 region - the region of the TCR that interacts directly with the peptide in the peptide:MHC presented on target cells - was sequenced in both the VM and Naive compartments of 5 mice. In a recent study, our lab has shown that these VM cells express generally self-reactive TCRs. At the same time, another lab has hypothesized that TCRs that have lower amounts of P and N added nucleotides between thier V and J domains (and are thus closer to germline) also tend to be more-selfreactive. In this analysis, I will be calculating the number of P and N additions in each of the reoccuring CDR3 sequences generated for both the VM and Naive and comparing the CDR3 sequences that are found exclusively in each compartment to see if VM CDR3 sequences have less P and N addition on average than the Naive CDR3 sequences. 
+
+## Loading and Compiling the Data
+First we need to load our packages and CSV files:
+```{r}
+rm(list = ls())
+library(tidyverse)
+
+Vm_data_1 <- read.csv("VM1.csv")
+Vm_data_2 <- read.csv("VM2.csv")
+Vm_data_3 <- read.csv("VM3.csv")
+Vm_data_4 <- read.csv("VM4.csv")
+Vm_data_5 <- read.csv("VM5.csv")
+
+N_data_1 <- read.csv("N1.csv")
+N_data_2 <- read.csv("N2.csv")
+N_data_3 <- read.csv("N3.csv")
+N_data_4 <- read.csv("N4.csv")
+N_data_5 <- read.csv("N5.csv")
+
+```
+
+
+Now we can compile all of the raw data into seprate files for the VM and the Naive:
+```{r}
+VM_data <- merge(Vm_data_1, Vm_data_2, all = TRUE)
+VM_data <- merge(VM_data, Vm_data_3, all = TRUE)
+VM_data <- merge(VM_data, Vm_data_4, all = TRUE)
+VM_data <- merge(VM_data, Vm_data_5, all = TRUE)
+
+N_data <- merge(N_data_1, N_data_2, all = TRUE)
+N_data <- merge(N_data, N_data_3, all = TRUE)
+N_data <- merge(N_data, N_data_4, all = TRUE)
+N_data <- merge(N_data, N_data_5, all = TRUE)
+```
+
+## Cleaning the Data
+The raw data contains lots of things that need to be removed. First, we will remove the bad reads that were obtained during sequencing. These reads are identified by an asterisk in the sequence code:
+```{r}
+Bad_Vm_reads <- subset(VM_data, CDR3.pep. %in% "*")
+VM_data_clean <- anti_join(VM_data, Bad_Vm_reads)
+```
+
+We are only interested in sequences that are reoccuring in our data set, so we will remove any sequences with less than 10 reads:
+```{r}
+VM_data_clean <- VM_data_clean %>% rename(read_count = copy)
+VM_data_clean <- subset(VM_data_clean, read_count > 10)
+```
+
+Finally we need to remove duplicates from the data set, but we want to keep the sequences with the highest amount of reads:
+```{r}
+VM_data_clean <- VM_data_clean %>% arrange(desc(read_count)) 
+VM_data_clean <- subset(VM_data_clean, !duplicated(CDR3.pep.))
+```
+
+Now we can do all of these operations on the Naive data set:
+```{r}
+Bad_N_reads <- subset(N_data, CDR3.pep. %in% "*")
+N_data_clean <- anti_join(N_data, Bad_N_reads)
+
+N_data_clean <- N_data_clean %>% rename(read_count = copy)
+N_data_clean <- subset(N_data_clean, read_count > 10)
+
+N_data_clean <- N_data_clean %>% arrange(desc(read_count))
+N_data_clean <- subset(N_data_clean, !duplicated(CDR3.pep.))
+```
+
+## Calculating N and P additions and Preforming Comparisons
+N and P additions occur between V region and J region of a TCR. This data has the basepair location of the V region end and the J region start, by subtracting these two values we can get the total number of addtions. Generally, the J region will start on the next base after the V region ends. This means we need to subtract 1 from the difference in order to get the real number of insertions. Sometimes, the V and J region overlap and start/end on the same base, for this case we will generate -1 as our number of additions, we will need to change all -1 values to 0:
+```{r}
+VM_data_clean <- VM_data_clean %>% mutate(PN_Addn = JReadBegin - VReadEnd - 1)
+
+VM_data_clean <- VM_data_clean %>% mutate(PN_Addn = replace(PN_Addn, PN_Addn == -1, 0))
+
+N_data_clean <- N_data_clean %>% mutate(PN_Addn = JReadBegin - VReadEnd - 1)
+
+N_data_clean <- N_data_clean %>% mutate(PN_Addn = replace(PN_Addn, PN_Addn == -1, 0))
+```
+
+We are only interested in comparing the CDR3 sequences that appear only in the VM compartment and only in the Naive compartment. We can generate these lists with the antijoin function:
+```{r}
+VM_not_in_N <- anti_join(VM_data_clean, N_data_clean, by = "CDR3.pep.")
+
+N_not_in_VM <- anti_join(N_data_clean, VM_data_clean, by = "CDR3.pep.")
+```
+
+## Plotting the data
+We need to generate a plot that shows how common each number of additions is in the TCR repitore of each compartment. By counting the number of CDR3 sequences that exist for each addition value we can plot them by percentage of the total repitore:
+```{r}
+VM_Percentage <- VM_not_in_N %>% 
+                  group_by(PN_Addn) %>% 
+                  tally() %>% 
+                  mutate(Percent_in_Repitore = (n/sum(n))*100)
+
+pl_VM1 <- VM_Percentage %>% ggplot() + 
+            aes(x = as.factor(PN_Addn), y = Percent_in_Repitore) +
+            geom_histogram(stat = "identity", fill = "blue") +
+            labs(y= "Percentage of TCRs", x = "Number of P and N Additions") +
+            ggtitle("Virtual Memory Repitore P and N Addition Frequency")
+pl_VM1
+```
+
+For the Naive data:
+```{r}
+N_Percentage <- N_not_in_VM %>% 
+                group_by(PN_Addn) %>% 
+                tally() %>% 
+                mutate(Percent_in_Repitore = (n/sum(n))*100)
+
+pl_N1 <- N_Percentage %>% ggplot() + 
+          aes(x = as.factor(PN_Addn), y = Percent_in_Repitore) +
+          geom_histogram(stat = "identity", fill = "red") +
+          labs(y= "Percentage of TCRs", x = "Number of P and N Additions") +
+          ggtitle("Naive Repitore P and N Addition Frequency")
+pl_N1
+```
+
+And an overlay of the two data sets:
+```{r}
+Pl_comb <- ggplot() + 
+            geom_histogram(data = VM_Percentage, stat = "identity", show.legend = TRUE,
+                 aes(x = PN_Addn, y = Percent_in_Repitore, group = 1), color='blue', fill = "blue", alpha = 0.4) + 
+            geom_histogram(data = N_Percentage, stat = "identity", show.legend = TRUE,
+                 aes(x = PN_Addn, y = Percent_in_Repitore, group = 1), color='red', fill = "red", alpha = 0.4) +
+            scale_x_continuous(limits = c(-2, 40)) +
+            labs(y= "Percentage of TCRs", x = "Number of P and N Additions") +
+            ggtitle("Virtual Memory Repitore (Blue) vs Naive Repitore (Red) P and N Addition Frequency")
+Pl_comb
+```
+
+## Comparing Based on the Total Number of Reads for Each CDR3 Sequence
+We can also do this comparision where the total count for each addition value is weighted based on how many reads any one sequence was found to have in the entire repitore. This weighted count will show what the CDR3 sequences look like on the level of each individual cell that was sequenced:
+```{r}
+VM_Perc_Norm <-  VM_not_in_N %>% 
+                group_by(PN_Addn) %>% 
+                tally(wt = read_count) %>% 
+                mutate(Percent_in_Repitore = (n/sum(n))*100)
+
+N_Perc_Norm <-  N_not_in_VM %>% 
+                group_by(PN_Addn) %>% 
+                tally(wt = read_count) %>% 
+                mutate(Percent_in_Repitore = (n/sum(n))*100)
+```
+
+Now for the plots, first the VM data:
+```{r}
+pl_VM_norm <- VM_Perc_Norm %>% ggplot() + 
+                aes(x = as.factor(PN_Addn), y = Percent_in_Repitore) +
+                geom_histogram(stat = "identity", fill = "blue") +
+                labs(y= "Percentage of Total TCR Reads", x = "Number of P and N Additions") +
+                ggtitle("Virtual Memory Repitore P and N Addition Frequency per CDR3 Read Count") 
+pl_VM_norm
+```
+
+Now the naive data:
+```{r}
+pl_N_norm <- N_Perc_Norm %>% ggplot() + 
+                aes(x = as.factor(PN_Addn), y = Percent_in_Repitore) +
+                geom_histogram(stat = "identity", fill = "red") +
+                labs(y= "Percentage of Total TCR Reads", x = "Number of P and N Additions") +
+                ggtitle("Naive Repitore P and N Addition Frequency per CDR3 Read Count")
+pl_N_norm
+```
+
+And an overlay of both:
+```{r}
+Pl_comb_norm <- ggplot() + 
+                geom_histogram(data = VM_Perc_Norm, stat = "identity", show.legend = TRUE,
+                  aes(x = PN_Addn, y = Percent_in_Repitore, group = 1), color='blue', fill = "blue", alpha = 0.4) + 
+                geom_histogram(data = N_Perc_Norm, stat = "identity", show.legend = TRUE,
+                  aes(x = PN_Addn, y = Percent_in_Repitore, group = 1), color='red', fill = "red", alpha = 0.4) +
+                scale_x_continuous(limits = c(-2, 40)) +
+                labs(y= "Percentage of Total TCR Reads", x = "Number of P and N Additions") +
+                ggtitle("Virtual Memory Repitore (Blue) vs Naive Repitore (Red) P and N Addition Frequency per CDR3 Read Count")
+Pl_comb_norm
+```
+
+## Conclusion
+It appears from this analysis that the VM compartment does tend to have more germline TCRs when compared to the naive compartment from the same mice. While it is not a drastic difference both analysies showed that there are less additions between the V and J region of VM TCRs. This supports the hypothesis that the closer to germline a TCR is higher the chance of it being self reactive, as the VM TCRs from this group have been shown emperically to be more self reactive than the Naive TCRs.
